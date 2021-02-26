@@ -1,0 +1,466 @@
+			CONFIGURACION UBUNTU SERVER
+
+Comandos:
+	sudo su (entrar como root)
+	sudo (ejecutar comando como root)
+	whoami (quién soy)
+	passwd (cambiar contraseña de root)
+	ifconfig (ver tarjetas de red)
+	nano (abrir y editar archivo)
+	ping6 (hacer ping con direccion ipv6)
+	service (para ejecutar cualquier servicio)
+	ip addr flush dev (para limpiar la tarjeta de red)
+	netstat -tulpn (conexiones activas y su puerto)
+	apt-get install (descargar e instalar paquetes)
+	apt-get remove ____ --purge (desintalar completamente paquetes)
+	tail -100 /var/log/syslog |more (ver archivo de logs)
+	route -A inet6 (Muestra tabla de enrutamiento)
+	route -A inet6 add red::/64 gw red::1 dev interfaz (crear ruta estatica)
+	route -A inet6 del red::/64 gw red::1 dev interfaz (eliminar ruta estatica)
+	dig 
+
+Tarjeta de red
+	Como root
+	nano /etc/network/interfaces
+		auto enp0s3
+		#...
+		iface enp0s3 inet6 static
+		address x:x:x:x::x
+		netmask 64
+	ip addr flush dev enp0s3
+	service networking restart
+
+Telnet – Xinetd
+	Como root y con la tajerta de red en nat e ipv4
+	apt-get install xinetd telnetd
+	pasarse a ipv6
+	nano /etc/xinetd.d/telnet
+		service telnet
+		{
+			disable = no
+			socket_type = stream
+			protocol = tcp
+			wait = no
+			flags = REUSE IPv6
+			user = root
+			server = /usr/sbin/in.telnetd
+			log_on_failure += USERID
+			log_on_success += PID HOST EXIT
+		}
+	nano /etc/xinetd.conf
+		…
+		defaults
+		{
+		…
+		}
+		includedir /etc/xinetd.d
+		service telnet
+		{
+			socket_type = stream
+			wait = no
+			nice = 10
+			user = root
+			server = /usr/sbin/in.telnetd
+			flags = IPv6
+		}
+	nano /etc/services (si es necesario cambiar puerto)
+	service xinetd restart
+
+SSH
+	Como root, tarjeta en nat e ipv4
+	apt-get install ssh
+	nano /etc/ssh/sshd_config
+		…
+		ListenAddress [x:x:x:x::x] (:#puerto si va a cambiar de puerto, se cambia tambien en el archivo de service)
+		…
+	service ssh restart
+
+SFTP
+	nano /etc/ssh/sshd_config
+		…
+		#Subsystem sftp /usr/lib/openssh/sftp-server
+		Subsystem sftp internal-sftp
+		… (Ultima linea)
+		Match Group sftp-users
+		X11forwarding no
+		AllowTcpForwarding no
+		ChrootDirectory /home (elegir directorio)
+		ForceCommand internal-sftp (Trabajar con sftp)
+	service ssh restart
+	groupadd sftp-users (crear grupo)
+	usermod -aG sftp-users ubuntu (Agregar usuario)
+	entrar como usuario
+	mkdir sftp
+
+FTP
+	apt-get install vsftpd
+	nano /etc/vsftpd.conf
+		local_enable=YES
+		write_enable=YES
+	service vsftp restart
+	adduser nombre
+
+DHCP6
+	apt-get install isc-dhcp-server
+	cd /etc/dhcp
+	cp dhcpd.conf dhcpd6.conf
+	En IPv6
+	nano dhcpd6.conf
+		...
+		default-lease-tim 86400;
+		max-lease-tim 86400;
+		...
+		authoritative;
+		...
+		log_facility local7;
+		(Borrar todo)
+		#Rango para el laboratorio
+		subnet6 3756:2700:3738:8600::/64{
+			range6 IPInicio IPFinal;
+			option dhcp6.name-servers 3756:2700:3738:8600::1;
+			option dhcp6.domain-search "WCubuntu.net";
+			dns-servers IP,IP ;
+		}
+	cd ..
+	cd default
+	nano isc-dhcp-server
+		...
+		DHCP_CONF=/etc/dhcp/dhcpd6.conf
+		...
+		DHCP_PId=/var/run/dhcpd6.pid
+		...
+		OPTIONS="6"
+		...
+		INTERFACES="interfaz"
+	sh -c "echo 'manual' > /etc/init/isc-dhcp-server.override"
+	service isc-dhcp-server stop
+	service isc-dhcp-server6 restart
+
+	//Para comprobar, se pone el dhcp dinamico en la tarjeta host-only y se verifica que coga direccion, luego se crea la ruta al servidor
+	cat /var/li/dhcp/dhcpd6.leases //Ver las direcciones entregadas
+
+DNS
+	hostnamectl status
+	hostnamectl set-hostname "ubuntu.WCubuntu.net" //Cambiar el nombre de la maquina
+	//En ipv4 y nat
+	apt-get install bind9 bind9utils //tambien se instalan los utiles para el resolvers
+	service bind9 start
+	//Ipv6 y host only
+	nano /etc/bind/named.conf
+		...
+		//Zona directa WCubuntu.net
+		zone "WCubuntu.net" {
+			type master;
+			file "/etc/bind/zones/WCubuntu.net.zone";
+		};
+
+		//Zona inversa WCubuntu.net
+		zone "0.0.6.8.8.3.7.3.0.0.7.2.6.5.7.3.ip6.arpa" {
+			type master;
+			file "/etc/bind/zones/WCubuntu.inv.zone";
+		};
+	mkdir /etc/bind/zones
+	nano /etc/bind/zones/WCubuntu.net.zone
+		$TTL 604800	;1 semana
+		@	IN	SOA	master.WCubuntu.net WCubuntu.net. (
+			2	;serial
+			604800	;refresh
+			86400	;retry
+			2419200	;expire
+			1W	;cache negativa TTL
+			)
+		@	IN	NS	WCubuntu.net.
+		@	IN	AAAA	direccionIPv6
+		ubuntu	IN	AAAA	direccionIPv6
+	cp /etc/bind/zones/WCubuntu.net.zone /etc/bind/zones/WCubuntu.inv.zone
+	nano /etc/bind/zones/WCubuntu.inv.zone
+		$TTL 604800	;1 semana
+		@	IN	SOA	master.WCubuntu.net. ns.WCubuntu.net. (
+			2	;serial
+			604800	;refresh
+			86400	;retry
+			2419200	;expire
+			1W	;cache negativa TTL
+			)
+		@	IN	NS	ns.WCubuntu.net.
+		@	IN	PTR	WCubuntu.net.
+		;Solo hextetos de host
+		1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0	IN	PTR	ubuntu.WCubuntu.net.
+	service bind9 restart
+	service bind9 status
+	dig WCubuntu.net AAAA //Comprobar funcionamiento
+	nano /etc/network/interfaces
+		...
+		dns-server direccionIPv6
+	____________________________________________________________________________________________________
+	|	Comprobamiento en el host con ip estatica                                                  |
+	| Agregar ruta en el host hasta el servidor dns persistente                                        |
+	| En el host se pone direccion, gw y dns (todo estatico) y que no haya nada en el archivo de hosts |
+	| ping -6 direccionDNS y ping -6 nombre.net                                                        |
+	| nslookup -q=ptr direccionDNS                                                                     |
+	|__________________________________________________________________________________________________|
+	//En el archivo del dhcp (/etc/dhcp/dhcpd6.conf) verificar que este la configuracion del dns
+	____________________________________________________________________________________________________
+	|	Comprobamiento en el host con ip dinamica                                                  |
+	| Agregar ruta en el host hasta el servidor dns persistente                                        |
+	| En el host se pone direccion, gw y dns (todo estatico) y que no haya nada en el archivo de hosts |
+	| ping -6 direccionDNS y ping -6 nombre.net                                                        |
+	| nslookup -q=ptr direccionDNS                                                                     |
+	| nslookup -q direccionDNS                                                                         |
+	|__________________________________________________________________________________________________|
+	cat /etc/default
+>DNS primario y secundario
+	Agregar en el named.conf del master
+		allow-transfer {ip_del_esclavo;}
+	Agregar en las zonas del master
+		zona directa WCubuntu.net.zone y en la inversa WCubuntu.inv.zone
+			...
+			@	IN	NS	ubuntu.WCubuntu.net.
+			@	IN	NS	ubuntu2.WCubuntu.net.
+			...
+	En el dns esclavo agregar en el named.conf
+		zone "WCubuntu.net" IN {
+			type slave;
+			file "WCubuntu.net.zone";
+			masters { 3756:2700:3738:8600::1; };
+		};
+
+		zone "0.0.6.8.8.3.7.3.0.0.7.2.6.5.7.3.ip6.arpa" IN{
+			type slave;
+			file "WCubuntu.inv.zone";
+			masters { 3756:2700:3738:8600::1; };
+		}; 
+WEB
+	En IPv4 y nat
+	apt-get install apache2 apache2-utils ssl-cert
+	En Ipv6 y Host only
+	nano /etc/apache2/apache2.conf
+		...
+		Timeoute 150
+		...
+		MaxKeepAliveRequests 150
+		...
+		KeepAliveTimeoute 5
+		... (Ultima linea)
+		Listen [3756:2700:3738:8600::1]:8080
+	nano /etc/apache2/conf-enabled/security.conf
+		...
+		ServerTokens Minimal
+		#ServerTokens OS
+		...
+		ServerSignature Off
+		#ServerSignature On
+	nano /etc/apache2/ports.conf
+		Listen 8080
+		//Verificar lo de abajo Listen 443
+	service apache2 restart
+	cd /etc/apache2/sites-available
+	cp 000-default.conf WCubuntu.net.conf
+	a2enmod ssl
+	a2ensite WCubuntu.net
+	a2ensite default-ssl
+	service apache2 restart
+	reboot
+	wget http://WCubuntu.net:8080
+	wget http://[3756:2700:3738:8600::1]:8080
+	wget https://WCubuntu.net:8080 --no-check-certificate
+>Pagina propia
+	Poner la carpeta que contiene la pagina en: var/www/
+	posteriormente deshabilitar los sitios por defectos
+		a2dissite default-ssl.conf
+		a2dissite 000-default.conf
+	y editar el DocumentRoot del sitio 
+	nano /etc/apache2/sites-enabled/WCubuntu.net.conf
+		...
+		DocumentRoot /var/www/NombreCarpeta
+	chmod -R 755 /var/www/html
+	service apache2 restart
+
+Servicio de Directorio
+	apt-get install slapd ldap-utils
+	dpkg-reconfigure slapd
+		->NO
+		Introducir el dominio: WCubuntu.net
+		Nombre de organizacion: WC
+		->HDB
+		->NO
+		->SI
+		->NO
+	ldapsearch -Q -LLL -Y EXTERNAL -H ldapi:/// -b cn=config dn
+	nano ~/.ldaprc
+		BASE dc=WCubuntu,dc=net
+		URI ldap://
+		BINDDN cn=admin,dn=WCubuntu,dn=net
+	ldapsearch -H ldap://WCubuntu.net -x -LLL -b dc=WCubuntu,dc=net dn
+	nano adicionarOU.ldif
+		dn: ou=medellin,dc=WCubuntu,dc=net
+		objectClass: organizationalUnit
+		ou: medellin
+	nano adicionarGRUPO.ldif
+		dn: cn=estudiantes,ou=medellin,dc=WCubuntu,dc=net
+		objectClass: posixGroup
+		cn: estudiantes
+		gidNumber: 1010
+	nano adicionarEST.ldif
+		dn: id=luis.santamaria,ou=medellin,dc=WCubuntu,dc=net
+		objectClass: inetOrgPerson
+		objectClass: posixAccount
+		uid: luis.santamaria
+		sn: santamaria
+		givenName: luis
+		cn: luis santamaria
+		displayName: luis santamaria
+		uidNumber: 20000
+		gidNumber: 1010
+		userPassword: 1234
+		homeDirectory: /home/luis.santamaria
+	ldapadd -x -D cn=admin,dc=WCubuntu,dc=net -W -f adicionaOU.ldif
+	ldapadd -x -D cn=admin,dc=WCubuntu,dc=net -W -f adicionaGRUPO.ldif
+	ldapadd -x -D cn=admin,dc=WCubuntu,dc=net -W -f adicionaEST.ldif
+	ldapsearch -x -LLL -b dc=WCubuntu,dc=net 'uid=luis.santamaria' cn gidNumber
+	
+ejabberd
+	wget https://www.process-one.net/downloads/downloads-action.php?file=/ejabberd/17.04/ejabberd_17.04-0_amd64.deb
+	dpkg -i ejabberd_17.04-0_amd64.deb
+	nano /opt/ejabberd-17.01/conf/ejabberd.yml
+		...
+		hosts:
+		  - "WCubuntu.net"
+		...
+		listen:
+		  -
+		     port: 5222
+		     ip: "::"
+		     ...
+		  -
+		     port: 5280
+		     ip: "::"
+		     ...
+
+		admin:
+		  - "admin@WCubuntu.net"
+	/opt/ejabberd-17.04/bin/ejabberdctl register admin WCubuntu.net 1234
+	/opt/ejabberd-17.04/bin/ejabberdctl start
+	/opt/ejabberd-17.04/bin/ejabberdctl status
+
+	>Navegador
+	http://ubuntu:5280/admin
+		>Dominios Virtuales
+			>entrar wcubuntu.net
+				>Usuarios
+					Poner usuario (camilo) y contraseña (1234) 
+					> Añadir usuario
+
+	>Cliente Pidgin
+	Despues de instalar en añadir
+		> Protocolo XMPP
+		> Nombre de usuario agregado en la web (camilo)
+		> Dominio (WCubuntu.net)
+		> Contraseña (1234)
+	En Avanzadas
+		> Seguridad de la conexión Utilizar cifrado si es posible
+		> Puerto de conexion 5222
+		> Conectar con el servidor ubuntu
+	
+			CONFIGURACION WINDOWS SERVER
+
+Tarjeta de red
+	Configuraciones de red e internet
+		Seleccionar tarjeta de red
+			Propiedades: Activar IPv6 y poner dirección (misma direcccion de red que el servidor y mismo prefijo)
+
+Telnet
+	Adiministrador del servidor
+		Roles y caracteristicas
+			Tipo de instalacion (basada en caracteristicas)
+			Caracteristicas (Cliente telnet)
+			Confirmacion
+
+SSH
+	Instalar bitvise ssh server
+	Administrador del servidor (Herramientas)
+	Configuracion simple
+		Abrir puertos de FireWall a todos
+		Activar cuenta
+
+DHCP
+	Activar roles y caracteristicas
+		Instalar Servidor dhcp
+	En DHCP
+	Administrador dhcp
+		IPv6
+			Ambito nuevo
+				llenar datos
+	//Verificar que la direccion del servidor este en el rango del pool del dhcp
+
+DNS
+	Agregar roles y caracteristicas
+		Instalar Servidor DNS
+	En DNS
+	Administrador dns
+		Ambito nuevo en zona directa
+			seguir los pasos
+		Ambito nuevo en zona inversa
+			seguir los pasos
+		Asegurar que esten los SOA en ambas zonas
+	Panel de control/sitemas
+		cambiar configuracion
+			mas //Cambiar nombre del equipo
+	Administrador dns
+		Zona directa
+			WCubuntu.net
+				nuevo host
+			//comprobar que se haya creado el inverso
+	En la tarjeta de red poner direccion y dns estatica
+	Configurar en el DHCP el parametro del DNS
+>Primario y secundario
+	En en el servidor 2, en nueva zona indicar que es secundaria y luego indicar la direccion del principal
+	En el principal permitir la transferencia en las propiedades de la zona
+
+WEB
+	
+>https
+	En administrador de IIS
+		Entrar al servidor - Sitios
+		Agregar sitio web
+			configurarlo en https
+			CONFIGURACION HOST (WINDOWS)
+
+Comandos, Power Shell (Adimistrador):
+	route print -6 (Tabla de enrutamiento IPv6)
+	route ADD red::/64 red::1 IF #interfaz (Crear ruta estatica)
+	delete route red::/64 interfaz
+	ipconfig /renew6 "*interfaz*"
+	ipconfig /release6 "*interfaz*"
+	nslookup
+
+Crear tarjeta de red host only
+	Preferencias maquina virtual
+		Red
+			Añadir tarjeta de red host only
+
+Tarjeta de red host only
+	Configuraciones de red e internet
+		Seleccionar tarjeta host-only
+			Propiedades: Activar IPv6 y poner dirección (misma direcccion de red que el servidor y mismo prefijo)
+
+FireWall
+	Configuraciones avanzadas
+		Reglas de entrada
+			Archivos e impresoras compartidos (ICMPv6): Activar regla
+		Reglas de salida
+			Archivos e impresoras compartidos (ICMPv6): Activar regla
+
+Power Shell (Adimistrador) conectar con SFTP
+	cd .\drivers\etc\
+	notepad .\hosts
+		… (ultima linea)
+		x:x:x:x::x	nombre.net (Cambia de ip a nombre)
+
+FileZilla
+	nombre.net	ubunutu 	****	22
+
+Wireshark
+	Al instalarlo se instala en complemento winpcap
+	Seleccionar tarjeta de red a escuchar	
+
